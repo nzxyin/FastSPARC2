@@ -31,57 +31,87 @@ def evaluate(model, step, configs, logger=None, vocoder=None):
     )
 
     # Get loss function
-    Loss = FastSpeech2Loss(preprocess_config, model_config).to(device)
+    Loss = FastSpeech2Loss().to(device)
 
     # Evaluation
     loss_sums = [0 for _ in range(6)]
-    for batchs in loader:
-        for batch in batchs:
-            batch = to_device(batch, device)
-            with torch.no_grad():
-                # Forward
-                output = model(*(batch[2:]))
+    for batch in loader:
+        batch = to_device(batch, device)
+        with torch.no_grad():
+            # Forward
+            (
+                _,
+                _,
+                texts,
+                src_lens,
+                max_src_len,
+                emas,
+                bn_lens,
+                max_bn_len,
+                pitches,
+                periodicities,
+                energies,
+                durations,
+            ) = batch
 
-                # Cal Loss
-                losses = Loss(batch, output)
+            # Forward
+            output = model(
+                texts,
+                src_lens,
+                max_src_len,
+                bn_lens,
+                max_bn_len,
+                durations,
+            )
 
-                for i in range(len(losses)):
-                    loss_sums[i] += losses[i].item() * len(batch[0])
+            targets = (
+                emas,
+                pitches,
+                periodicities,
+                energies,
+                durations,
+            )
+
+            # Cal Loss
+            losses = Loss(targets, output)
+
+            for i in range(len(losses)):
+                loss_sums[i] += losses[i].item() * len(batch[0])
 
     loss_means = [loss_sum / len(dataset) for loss_sum in loss_sums]
 
-    message = "Validation Step {}, Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Pitch Loss: {:.4f}, Energy Loss: {:.4f}, Duration Loss: {:.4f}".format(
+    message = "Validation Step {}, Total Loss: {:.4f}, EMA Loss: {:.4f}, Periodicity Loss: {:.4f}, Pitch Loss: {:.4f}, Energy Loss: {:.4f}, Duration Loss: {:.4f}".format(
         *([step] + [l for l in loss_means])
     )
 
     if logger is not None:
-        fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
-            batch,
-            output,
-            vocoder,
-            model_config,
-            preprocess_config,
-        )
+        # fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
+        #     batch,
+        #     output,
+        #     vocoder,
+        #     model_config,
+        #     preprocess_config,
+        # )
 
         log(logger, step, losses=loss_means)
-        log(
-            logger,
-            fig=fig,
-            tag="Validation/step_{}_{}".format(step, tag),
-        )
-        sampling_rate = preprocess_config["preprocessing"]["audio"]["sampling_rate"]
-        log(
-            logger,
-            audio=wav_reconstruction,
-            sampling_rate=sampling_rate,
-            tag="Validation/step_{}_{}_reconstructed".format(step, tag),
-        )
-        log(
-            logger,
-            audio=wav_prediction,
-            sampling_rate=sampling_rate,
-            tag="Validation/step_{}_{}_synthesized".format(step, tag),
-        )
+        # log(
+        #     logger,
+        #     fig=fig,
+        #     tag="Validation/step_{}_{}".format(step, tag),
+        # )
+        # sampling_rate = preprocess_config["preprocessing"]["audio"]["sampling_rate"]
+        # log(
+        #     logger,
+        #     audio=wav_reconstruction,
+        #     sampling_rate=sampling_rate,
+        #     tag="Validation/step_{}_{}_reconstructed".format(step, tag),
+        # )
+        # log(
+        #     logger,
+        #     audio=wav_prediction,
+        #     sampling_rate=sampling_rate,
+        #     tag="Validation/step_{}_{}_synthesized".format(step, tag),
+        # )
 
     return message
 

@@ -1,91 +1,70 @@
 import torch
 import torch.nn as nn
+from .sdtw_loss import SoftDTW
 
 
 class FastSpeech2Loss(nn.Module):
     """ FastSpeech2 Loss """
 
-    def __init__(self, preprocess_config, model_config):
+    def __init__(self):
         super(FastSpeech2Loss, self).__init__()
-        self.pitch_feature_level = preprocess_config["preprocessing"]["pitch"][
-            "feature"
-        ]
-        self.energy_feature_level = preprocess_config["preprocessing"]["energy"][
-            "feature"
-        ]
         self.mse_loss = nn.MSELoss()
-        self.mae_loss = nn.L1Loss()
+        # self.sdtw_loss = SoftDTW(gamma=0.1, normalize=True)
 
-    def forward(self, inputs, predictions):
+    def forward(self, targets, predictions):
         (
-            mel_targets,
-            _,
-            _,
+            ema_targets,
             pitch_targets,
+            periodicity_targets,
             energy_targets,
             duration_targets,
-        ) = inputs[6:]
+        ) = targets
+        assert ema_targets.shape[2] == 12
         (
-            mel_predictions,
-            postnet_mel_predictions,
+            _,
             pitch_predictions,
             energy_predictions,
             log_duration_predictions,
             _,
+            periodicity_predictions,
+            ema_predictions,
             src_masks,
-            mel_masks,
+            bn_masks,
             _,
             _,
         ) = predictions
         src_masks = ~src_masks
-        mel_masks = ~mel_masks
+        bn_masks = ~bn_masks
         log_duration_targets = torch.log(duration_targets.float() + 1)
-        mel_targets = mel_targets[:, : mel_masks.shape[1], :]
-        mel_masks = mel_masks[:, :mel_masks.shape[1]]
+        ema_targets = ema_targets[:, : bn_masks.shape[1], :]
+        bn_masks = bn_masks[:, :bn_masks.shape[1]]
 
         log_duration_targets.requires_grad = False
         pitch_targets.requires_grad = False
         energy_targets.requires_grad = False
-        mel_targets.requires_grad = False
-
-        if self.pitch_feature_level == "phoneme_level":
-            pitch_predictions = pitch_predictions.masked_select(src_masks)
-            pitch_targets = pitch_targets.masked_select(src_masks)
-        elif self.pitch_feature_level == "frame_level":
-            pitch_predictions = pitch_predictions.masked_select(mel_masks)
-            pitch_targets = pitch_targets.masked_select(mel_masks)
-
-        if self.energy_feature_level == "phoneme_level":
-            energy_predictions = energy_predictions.masked_select(src_masks)
-            energy_targets = energy_targets.masked_select(src_masks)
-        if self.energy_feature_level == "frame_level":
-            energy_predictions = energy_predictions.masked_select(mel_masks)
-            energy_targets = energy_targets.masked_select(mel_masks)
-
-        log_duration_predictions = log_duration_predictions.masked_select(src_masks)
-        log_duration_targets = log_duration_targets.masked_select(src_masks)
-
-        mel_predictions = mel_predictions.masked_select(mel_masks.unsqueeze(-1))
-        postnet_mel_predictions = postnet_mel_predictions.masked_select(
-            mel_masks.unsqueeze(-1)
-        )
-        mel_targets = mel_targets.masked_select(mel_masks.unsqueeze(-1))
-
-        mel_loss = self.mae_loss(mel_predictions, mel_targets)
-        postnet_mel_loss = self.mae_loss(postnet_mel_predictions, mel_targets)
-
-        pitch_loss = self.mse_loss(pitch_predictions, pitch_targets)
-        energy_loss = self.mse_loss(energy_predictions, energy_targets)
-        duration_loss = self.mse_loss(log_duration_predictions, log_duration_targets)
-
+        ema_targets.requires_grad = False
+        periodicity_targets.requires_grad = False
+        
+        ema_loss = self.mse_loss(ema_predictions.masked_select(bn_masks.unsqueeze(-1)), ema_targets.masked_select(bn_masks.unsqueeze(-1)))
+        periodicity_loss = self.mse_loss(periodicity_predictions.masked_select(bn_masks), periodicity_targets.masked_select(bn_masks))
+        pitch_loss = self.mse_loss(pitch_predictions.masked_select(bn_masks), pitch_targets.masked_select(bn_masks))
+        energy_loss = self.mse_loss(energy_predictions.masked_select(bn_masks), energy_targets.masked_select(bn_masks))
+        duration_loss = self.mse_loss(log_duration_predictions.masked_select(src_masks), log_duration_targets.masked_select(src_masks))
+        # print(ema_loss.shape)
+        # print(self.sdtw_loss(ema_predictions, ema_targets))
+        # ema_loss += torch.mean(self.sdtw_loss(ema_predictions, ema_targets))
+        # periodicity_loss += torch.mean(self.sdtw_loss(periodicity_predictions, periodicity_targets))
+        # pitch_loss += torch.mean(self.sdtw_loss(pitch_predictions, pitch_targets))
+        # energy_loss += torch.mean(self.sdtw_loss(energy_predictions, energy_targets))
+        # print(ema_loss.shape)
         total_loss = (
-            mel_loss + postnet_mel_loss + duration_loss + pitch_loss + energy_loss
+            ema_loss + duration_loss + pitch_loss + energy_loss + periodicity_loss
         )
 
         return (
             total_loss,
-            mel_loss,
-            postnet_mel_loss,
+            ema_loss,
+            periodicity_loss,
             pitch_loss,
             energy_loss,
             duration_loss,

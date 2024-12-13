@@ -13,16 +13,21 @@ class Dataset(Dataset):
     def __init__(
         self, filename, preprocess_config, train_config, sort=False, drop_last=False
     ):
+        self.preprocessed_path = preprocess_config['path']['preprocessed_path']
         self.dataset_name = preprocess_config["dataset"]
-        self.preprocessed_path = preprocess_config["path"]["preprocessed_path"]
+        self.ema_path = preprocess_config['path']['ema_path']
+        self.energy_path = preprocess_config['path']['energy_path']
+        self.pitch_path = preprocess_config['path']['pitch_path']
+        self.periodicity_path = preprocess_config['path']['periodicity_path']
+        self.duration_path = preprocess_config['path']['duration_path']
         self.cleaners = preprocess_config["preprocessing"]["text"]["text_cleaners"]
         self.batch_size = train_config["optimizer"]["batch_size"]
 
-        self.basename, self.speaker, self.text, self.raw_text = self.process_meta(
+        self.basename, self.text, self.raw_text = self.process_meta(
             filename
         )
-        with open(os.path.join(self.preprocessed_path, "speakers.json")) as f:
-            self.speaker_map = json.load(f)
+        # with open(os.path.join(self.preprocessed_path, "speakers.json")) as f:
+        #     self.speaker_map = json.load(f)
         self.sort = sort
         self.drop_last = drop_last
 
@@ -31,42 +36,43 @@ class Dataset(Dataset):
 
     def __getitem__(self, idx):
         basename = self.basename[idx]
-        speaker = self.speaker[idx]
-        speaker_id = self.speaker_map[speaker]
         raw_text = self.raw_text[idx]
         phone = np.array(text_to_sequence(self.text[idx], self.cleaners))
-        mel_path = os.path.join(
-            self.preprocessed_path,
-            "mel",
-            "{}-mel-{}.npy".format(speaker, basename),
+        ema_path = os.path.join(
+            self.ema_path,
+            f"{basename}.npy",
         )
-        mel = np.load(mel_path)
+        ema = np.load(ema_path).T
+        assert ema.shape[1] == 12
         pitch_path = os.path.join(
-            self.preprocessed_path,
-            "pitch",
-            "{}-pitch-{}.npy".format(speaker, basename),
+            self.pitch_path,
+            f"{basename}.npy",
         )
-        pitch = np.load(pitch_path)
+        pitch = np.load(pitch_path)[:ema.shape[0]]
+        periodicity_path = os.path.join(
+            self.periodicity_path,
+            f"{basename}.npy",
+        )
+        periodicity = np.load(periodicity_path)[:ema.shape[0]]
         energy_path = os.path.join(
-            self.preprocessed_path,
-            "energy",
-            "{}-energy-{}.npy".format(speaker, basename),
+            self.energy_path,
+            f"{basename}.npy",
         )
-        energy = np.load(energy_path)
+        energy = np.load(energy_path)[:ema.shape[0]]
         duration_path = os.path.join(
-            self.preprocessed_path,
-            "duration",
-            "{}-duration-{}.npy".format(speaker, basename),
+            self.duration_path,
+            f"{basename}.npy",
         )
         duration = np.load(duration_path)
+        assert duration.shape[0] == phone.shape[0]
 
         sample = {
             "id": basename,
-            "speaker": speaker_id,
             "text": phone,
             "raw_text": raw_text,
-            "mel": mel,
+            "ema": ema,
             "pitch": pitch,
+            "periodicity": periodicity,
             "energy": energy,
             "duration": duration,
         }
@@ -78,72 +84,71 @@ class Dataset(Dataset):
             os.path.join(self.preprocessed_path, filename), "r", encoding="utf-8"
         ) as f:
             name = []
-            speaker = []
             text = []
             raw_text = []
             for line in f.readlines():
-                n, s, t, r = line.strip("\n").split("|")
+                n, t, r = line.strip("\n").split("|")
                 name.append(n)
-                speaker.append(s)
                 text.append(t)
                 raw_text.append(r)
-            return name, speaker, text, raw_text
+            return name, text, raw_text
 
-    def reprocess(self, data, idxs):
+    def reprocess(self, data):
+        idxs = range(len(data))
         ids = [data[idx]["id"] for idx in idxs]
-        speakers = [data[idx]["speaker"] for idx in idxs]
         texts = [data[idx]["text"] for idx in idxs]
         raw_texts = [data[idx]["raw_text"] for idx in idxs]
-        mels = [data[idx]["mel"] for idx in idxs]
+        emas = [data[idx]["ema"] for idx in idxs]
         pitches = [data[idx]["pitch"] for idx in idxs]
+        periodicities = [data[idx]["periodicity"] for idx in idxs]
         energies = [data[idx]["energy"] for idx in idxs]
         durations = [data[idx]["duration"] for idx in idxs]
 
         text_lens = np.array([text.shape[0] for text in texts])
-        mel_lens = np.array([mel.shape[0] for mel in mels])
+        bn_lens = np.array([ema.shape[0] for ema in emas])
 
-        speakers = np.array(speakers)
-        texts = pad_1D(texts)
-        mels = pad_2D(mels)
-        pitches = pad_1D(pitches)
-        energies = pad_1D(energies)
-        durations = pad_1D(durations)
+        texts = np.stack([np.pad(text, (0, max(text_lens) - text.shape[0])) for text in texts])
+        emas = np.stack([np.pad(ema, ((0, max(bn_lens) - ema.shape[0]), (0, 0))) for ema in emas])
+        pitches = np.stack([np.pad(pitch, (0, max(bn_lens) - pitch.shape[0])) for pitch in pitches])
+        periodicities = np.stack([np.pad(periodicity, (0, max(bn_lens) - periodicity.shape[0])) for periodicity in periodicities])
+        energies = np.stack([np.pad(energy, (0, max(bn_lens) - energy.shape[0])) for energy in energies])
+        durations = np.stack([np.pad(duration, (0, max(text_lens) - duration.shape[0])) for duration in durations])
 
         return (
             ids,
             raw_texts,
-            speakers,
             texts,
             text_lens,
             max(text_lens),
-            mels,
-            mel_lens,
-            max(mel_lens),
+            emas,
+            bn_lens,
+            max(bn_lens),
             pitches,
+            periodicities,
             energies,
             durations,
         )
 
     def collate_fn(self, data):
-        data_size = len(data)
+        # data_size = len(data)
 
-        if self.sort:
-            len_arr = np.array([d["text"].shape[0] for d in data])
-            idx_arr = np.argsort(-len_arr)
-        else:
-            idx_arr = np.arange(data_size)
+        # if self.sort:
+        #     len_arr = np.array([d["text"].shape[0] for d in data])
+        #     idx_arr = np.argsort(-len_arr)
+        # else:
+        #     idx_arr = np.arange(data_size)
 
-        tail = idx_arr[len(idx_arr) - (len(idx_arr) % self.batch_size) :]
-        idx_arr = idx_arr[: len(idx_arr) - (len(idx_arr) % self.batch_size)]
-        idx_arr = idx_arr.reshape((-1, self.batch_size)).tolist()
-        if not self.drop_last and len(tail) > 0:
-            idx_arr += [tail.tolist()]
+        # tail = idx_arr[len(idx_arr) - (len(idx_arr) % self.batch_size) :]
+        # idx_arr = idx_arr[: len(idx_arr) - (len(idx_arr) % self.batch_size)]
+        # idx_arr = idx_arr.reshape((-1, self.batch_size)).tolist()
+        # if not self.drop_last and len(tail) > 0:
+        #     idx_arr += [tail.tolist()]
 
-        output = list()
-        for idx in idx_arr:
-            output.append(self.reprocess(data, idx))
+        # output = list()
+        # for idx in idx_arr:
+        #     output.append()
 
-        return output
+        return self.reprocess(data)
 
 
 class TextDataset(Dataset):

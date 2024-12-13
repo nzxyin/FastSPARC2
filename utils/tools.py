@@ -20,50 +20,49 @@ def to_device(data, device):
         (
             ids,
             raw_texts,
-            speakers,
             texts,
             src_lens,
             max_src_len,
-            mels,
-            mel_lens,
-            max_mel_len,
+            emas,
+            bn_lens,
+            max_bn_len,
             pitches,
+            periodicities,
             energies,
             durations,
         ) = data
 
-        speakers = torch.from_numpy(speakers).long().to(device)
         texts = torch.from_numpy(texts).long().to(device)
         src_lens = torch.from_numpy(src_lens).to(device)
-        mels = torch.from_numpy(mels).float().to(device)
-        mel_lens = torch.from_numpy(mel_lens).to(device)
+        emas = torch.from_numpy(emas).float().to(device)
+        bn_lens = torch.from_numpy(bn_lens).to(device)
         pitches = torch.from_numpy(pitches).float().to(device)
+        periodicities = torch.from_numpy(periodicities).float().to(device)
         energies = torch.from_numpy(energies).to(device)
         durations = torch.from_numpy(durations).long().to(device)
 
         return (
             ids,
             raw_texts,
-            speakers,
             texts,
             src_lens,
             max_src_len,
-            mels,
-            mel_lens,
-            max_mel_len,
+            emas,
+            bn_lens,
+            max_bn_len,
             pitches,
+            periodicities,
             energies,
             durations,
         )
 
-    if len(data) == 6:
-        (ids, raw_texts, speakers, texts, src_lens, max_src_len) = data
+    if len(data) == 5:
+        (ids, raw_texts, texts, src_lens, max_src_len) = data
 
-        speakers = torch.from_numpy(speakers).long().to(device)
         texts = torch.from_numpy(texts).long().to(device)
         src_lens = torch.from_numpy(src_lens).to(device)
 
-        return (ids, raw_texts, speakers, texts, src_lens, max_src_len)
+        return (ids, raw_texts, texts, src_lens, max_src_len)
 
 
 def log(
@@ -71,8 +70,8 @@ def log(
 ):
     if losses is not None:
         logger.add_scalar("Loss/total_loss", losses[0], step)
-        logger.add_scalar("Loss/mel_loss", losses[1], step)
-        logger.add_scalar("Loss/mel_postnet_loss", losses[2], step)
+        logger.add_scalar("Loss/ema_loss", losses[1], step)
+        logger.add_scalar("Loss/periodicity_loss", losses[2], step)
         logger.add_scalar("Loss/pitch_loss", losses[3], step)
         logger.add_scalar("Loss/energy_loss", losses[4], step)
         logger.add_scalar("Loss/duration_loss", losses[5], step)
@@ -262,14 +261,14 @@ def plot_mel(data, stats, titles):
     return fig
 
 
-def pad_1D(inputs, PAD=0):
+def pad_1D(inputs, max_len=None, PAD=0):
     def pad_data(x, length, PAD):
         x_padded = np.pad(
             x, (0, length - x.shape[0]), mode="constant", constant_values=PAD
         )
         return x_padded
-
-    max_len = max((len(x) for x in inputs))
+    if max_len == None:
+        max_len = max((len(x) for x in inputs))
     padded = np.stack([pad_data(x, max_len, PAD) for x in inputs])
 
     return padded

@@ -8,8 +8,8 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from utils.model import get_model, get_vocoder, get_param_num
-from utils.tools import to_device, log, synth_one_sample
+from utils.model import get_model, get_param_num
+from utils.tools import to_device, log
 from model import FastSpeech2Loss
 from dataset import Dataset
 
@@ -25,27 +25,28 @@ def main(args, configs):
 
     # Get dataset
     dataset = Dataset(
-        "train.txt", preprocess_config, train_config, sort=True, drop_last=True
+        "train.txt", preprocess_config, train_config, sort=False, drop_last=False
     )
     batch_size = train_config["optimizer"]["batch_size"]
-    group_size = 4  # Set this larger than 1 to enable sorting in Dataset
-    assert batch_size * group_size < len(dataset)
+    # group_size = 1  # Set this larger than 1 to enable sorting in Dataset
+    assert batch_size < len(dataset)
     loader = DataLoader(
         dataset,
-        batch_size=batch_size * group_size,
+        batch_size=batch_size,
+        num_workers=0,
         shuffle=True,
         collate_fn=dataset.collate_fn,
     )
 
     # Prepare model
     model, optimizer = get_model(args, configs, device, train=True)
-    model = nn.DataParallel(model)
+    # model = nn.DataParallel(model)
     num_param = get_param_num(model)
-    Loss = FastSpeech2Loss(preprocess_config, model_config).to(device)
+    Loss = FastSpeech2Loss().to(device)
     print("Number of FastSpeech2 Parameters:", num_param)
 
-    # Load vocoder
-    vocoder = get_vocoder(model_config, device)
+    # # Load vocoder
+    # vocoder = get_vocoder(model_config, device)
 
     # Init logger
     for p in train_config["path"].values():
@@ -65,7 +66,6 @@ def main(args, configs):
     total_step = train_config["step"]["total_step"]
     log_step = train_config["step"]["log_step"]
     save_step = train_config["step"]["save_step"]
-    synth_step = train_config["step"]["synth_step"]
     val_step = train_config["step"]["val_step"]
 
     outer_bar = tqdm(total=total_step, desc="Training", position=0)
@@ -74,98 +74,127 @@ def main(args, configs):
 
     while True:
         inner_bar = tqdm(total=len(loader), desc="Epoch {}".format(epoch), position=1)
-        for batchs in loader:
-            for batch in batchs:
-                batch = to_device(batch, device)
+        for batch in loader:
+            
+            batch = to_device(batch, device)
+            (
+                _,
+                _,
+                texts,
+                src_lens,
+                max_src_len,
+                emas,
+                bn_lens,
+                max_bn_len,
+                pitches,
+                periodicities,
+                energies,
+                durations,
+            ) = batch
 
-                # Forward
-                output = model(*(batch[2:]))
+            # Forward
+            output = model(
+                texts,
+                src_lens,
+                max_src_len,
+                bn_lens,
+                max_bn_len,
+                durations,
+            )
 
-                # Cal Loss
-                losses = Loss(batch, output)
-                total_loss = losses[0]
+            targets = (
+                emas,
+                pitches,
+                periodicities,
+                energies,
+                durations,
+            )
 
-                # Backward
-                total_loss = total_loss / grad_acc_step
-                total_loss.backward()
-                if step % grad_acc_step == 0:
-                    # Clipping gradients to avoid gradient explosion
-                    nn.utils.clip_grad_norm_(model.parameters(), grad_clip_thresh)
+            # Cal Loss
+            losses = Loss(targets, output)
+            total_loss = losses[0]
 
-                    # Update weights
-                    optimizer.step_and_update_lr()
-                    optimizer.zero_grad()
+            # Backward
+            total_loss = total_loss / grad_acc_step
+            total_loss.backward()
+            if step % grad_acc_step == 0:
+                # Clipping gradients to avoid gradient explosion
+                nn.utils.clip_grad_norm_(model.parameters(), grad_clip_thresh)
 
-                if step % log_step == 0:
-                    losses = [l.item() for l in losses]
-                    message1 = "Step {}/{}, ".format(step, total_step)
-                    message2 = "Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Pitch Loss: {:.4f}, Energy Loss: {:.4f}, Duration Loss: {:.4f}".format(
-                        *losses
-                    )
+                # Update weights
+                optimizer.step_and_update_lr()
+                optimizer.zero_grad()
 
-                    with open(os.path.join(train_log_path, "log.txt"), "a") as f:
-                        f.write(message1 + message2 + "\n")
+            if step % log_step == 0:
+                losses = [l.item() for l in losses]
+                message1 = "Step {}/{}, ".format(step, total_step)
+                message2 = "Total Loss: {:.4f}, EMA Loss: {:.4f}, Periodicity Loss: {:.4f}, Pitch Loss: {:.4f}, Energy Loss: {:.4f}, Duration Loss: {:.4f}".format(
+                    *losses
+                )
 
-                    outer_bar.write(message1 + message2)
+                with open(os.path.join(train_log_path, "log.txt"), "a") as f:
+                    f.write(message1 + message2 + "\n")
 
-                    log(train_logger, step, losses=losses)
+                outer_bar.write(message1 + message2)
 
-                if step % synth_step == 0:
-                    fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
-                        batch,
-                        output,
-                        vocoder,
-                        model_config,
-                        preprocess_config,
-                    )
-                    log(
-                        train_logger,
-                        fig=fig,
-                        tag="Training/step_{}_{}".format(step, tag),
-                    )
-                    sampling_rate = preprocess_config["preprocessing"]["audio"][
-                        "sampling_rate"
-                    ]
-                    log(
-                        train_logger,
-                        audio=wav_reconstruction,
-                        sampling_rate=sampling_rate,
-                        tag="Training/step_{}_{}_reconstructed".format(step, tag),
-                    )
-                    log(
-                        train_logger,
-                        audio=wav_prediction,
-                        sampling_rate=sampling_rate,
-                        tag="Training/step_{}_{}_synthesized".format(step, tag),
-                    )
+                log(train_logger, step, losses=losses)
 
-                if step % val_step == 0:
-                    model.eval()
-                    message = evaluate(model, step, configs, val_logger, vocoder)
-                    with open(os.path.join(val_log_path, "log.txt"), "a") as f:
-                        f.write(message + "\n")
-                    outer_bar.write(message)
+            # if step % synth_step == 0:
+            #     pass
+                # fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
+                #     batch,
+                #     output,
+                #     vocoder,
+                #     model_config,
+                #     preprocess_config,
+                # )
+                # log(
+                #     train_logger,
+                #     fig=fig,
+                #     tag="Training/step_{}_{}".format(step, tag),
+                # )
+                # sampling_rate = preprocess_config["preprocessing"]["audio"][
+                #     "sampling_rate"
+                # ]
+                # log(
+                #     train_logger,
+                #     audio=wav_reconstruction,
+                #     sampling_rate=sampling_rate,
+                #     tag="Training/step_{}_{}_reconstructed".format(step, tag),
+                # )
+                # log(
+                #     train_logger,
+                #     audio=wav_prediction,
+                #     sampling_rate=sampling_rate,
+                #     tag="Training/step_{}_{}_synthesized".format(step, tag),
+                # )
 
-                    model.train()
+            if step % val_step == 0:
+                model.eval()
+                message = evaluate(model, step, configs, val_logger, None)
+                with open(os.path.join(val_log_path, "log.txt"), "a") as f:
+                    f.write(message + "\n")
+                outer_bar.write(message)
 
-                if step % save_step == 0:
-                    torch.save(
-                        {
-                            "model": model.module.state_dict(),
-                            "optimizer": optimizer._optimizer.state_dict(),
-                        },
-                        os.path.join(
-                            train_config["path"]["ckpt_path"],
-                            "{}.pth.tar".format(step),
-                        ),
-                    )
+                model.train()
 
-                if step == total_step:
-                    quit()
-                step += 1
-                outer_bar.update(1)
+            if step % save_step == 0:
+                torch.save(
+                    {
+                        "model": model.state_dict(),
+                        "optimizer": optimizer._optimizer.state_dict(),
+                    },
+                    os.path.join(
+                        train_config["path"]["ckpt_path"],
+                        "{}.pth.tar".format(step),
+                    ),
+                )
 
+            if step == total_step:
+                quit()
+            step += 1
             inner_bar.update(1)
+            outer_bar.update(1)
         epoch += 1
 
 
@@ -188,9 +217,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Read Config
-    preprocess_config = yaml.load(
-        open(args.preprocess_config, "r"), Loader=yaml.FullLoader
-    )
+    preprocess_config = yaml.load(open(args.preprocess_config, "r"), Loader=yaml.FullLoader)
     model_config = yaml.load(open(args.model_config, "r"), Loader=yaml.FullLoader)
     train_config = yaml.load(open(args.train_config, "r"), Loader=yaml.FullLoader)
     configs = (preprocess_config, model_config, train_config)
