@@ -75,10 +75,11 @@ def main(args, configs):
     while True:
         inner_bar = tqdm(total=len(loader), desc="Epoch {}".format(epoch), position=1)
         for batch in loader:
-            
+            # print(batch)
             batch = to_device(batch, device)
             (
                 _,
+                speakers,
                 _,
                 texts,
                 src_lens,
@@ -94,6 +95,7 @@ def main(args, configs):
 
             # Forward
             output = model(
+                speakers,
                 texts,
                 src_lens,
                 max_src_len,

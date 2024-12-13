@@ -26,9 +26,10 @@ class Dataset(Dataset):
         self.basename, self.text, self.raw_text = self.process_meta(
             filename
         )
-        # with open(os.path.join(self.preprocessed_path, "speakers.json")) as f:
-        #     self.speaker_map = json.load(f)
-        self.sort = sort
+        
+        with open(os.path.join(self.preprocessed_path, "speakers.json")) as f:
+            self.speaker_map = json.load(f)
+        # self.sort = sort
         self.drop_last = drop_last
 
     def __len__(self):
@@ -68,6 +69,7 @@ class Dataset(Dataset):
 
         sample = {
             "id": basename,
+            "speaker": self.speaker_map[basename.split('_')[0]],
             "text": phone,
             "raw_text": raw_text,
             "ema": ema,
@@ -96,6 +98,7 @@ class Dataset(Dataset):
     def reprocess(self, data):
         idxs = range(len(data))
         ids = [data[idx]["id"] for idx in idxs]
+        speakers = [data[idx]["speaker"] for idx in idxs]
         texts = [data[idx]["text"] for idx in idxs]
         raw_texts = [data[idx]["raw_text"] for idx in idxs]
         emas = [data[idx]["ema"] for idx in idxs]
@@ -104,6 +107,7 @@ class Dataset(Dataset):
         energies = [data[idx]["energy"] for idx in idxs]
         durations = [data[idx]["duration"] for idx in idxs]
 
+        speakers = np.array(speakers)
         text_lens = np.array([text.shape[0] for text in texts])
         bn_lens = np.array([ema.shape[0] for ema in emas])
 
@@ -113,9 +117,9 @@ class Dataset(Dataset):
         periodicities = np.stack([np.pad(periodicity, (0, max(bn_lens) - periodicity.shape[0])) for periodicity in periodicities])
         energies = np.stack([np.pad(energy, (0, max(bn_lens) - energy.shape[0])) for energy in energies])
         durations = np.stack([np.pad(duration, (0, max(text_lens) - duration.shape[0])) for duration in durations])
-
         return (
             ids,
+            speakers,
             raw_texts,
             texts,
             text_lens,

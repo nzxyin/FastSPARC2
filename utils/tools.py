@@ -16,9 +16,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def to_device(data, device):
-    if len(data) == 12:
+    if len(data) == 13:
         (
             ids,
+            speakers,
             raw_texts,
             texts,
             src_lens,
@@ -32,17 +33,19 @@ def to_device(data, device):
             durations,
         ) = data
 
+        speakers = torch.from_numpy(speakers).long().to(device)
         texts = torch.from_numpy(texts).long().to(device)
-        src_lens = torch.from_numpy(src_lens).to(device)
+        src_lens = torch.from_numpy(src_lens).long().to(device)
         emas = torch.from_numpy(emas).float().to(device)
-        bn_lens = torch.from_numpy(bn_lens).to(device)
+        bn_lens = torch.from_numpy(bn_lens).long().to(device)
         pitches = torch.from_numpy(pitches).float().to(device)
         periodicities = torch.from_numpy(periodicities).float().to(device)
-        energies = torch.from_numpy(energies).to(device)
+        energies = torch.from_numpy(energies).float().to(device)
         durations = torch.from_numpy(durations).long().to(device)
 
         return (
             ids,
+            speakers,
             raw_texts,
             texts,
             src_lens,

@@ -41,6 +41,7 @@ def evaluate(model, step, configs, logger=None, vocoder=None):
             # Forward
             (
                 _,
+                speakers,
                 _,
                 texts,
                 src_lens,
@@ -56,6 +57,7 @@ def evaluate(model, step, configs, logger=None, vocoder=None):
 
             # Forward
             output = model(
+                speakers,
                 texts,
                 src_lens,
                 max_src_len,

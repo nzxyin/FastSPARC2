@@ -1,7 +1,7 @@
 path:
-  ckpt_path: "/data/nzxyin/FastSPARC2/output/ckpt/LibriTTS_R_PN_1"
-  log_path: "/data/nzxyin/FastSPARC2/output/log/LibriTTS_R_PN_1"
-  result_path: "/data/nzxyin/FastSPARC2/output/result/LibriTTS_R_PN_1"
+  ckpt_path: "/data/nzxyin/FastSPARC2/output/ckpt/LibriTTS_R_PN_speakeremb"
+  log_path: "/data/nzxyin/FastSPARC2/output/log/LibriTTS_R_PN_speakeremb"
+  result_path: "/data/nzxyin/FastSPARC2/output/result/LibriTTS_R_PN_speakeremb"
 optimizer:
   batch_size: 32
   betas: [0.9, 0.98]
